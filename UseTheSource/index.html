@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+
+		<title>Use the Source</title>
+
+		<meta name="description" content="Use go/ast for fun and profit">
+		<meta name="author" content="derek@igneous.io">
+
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<link rel="stylesheet" href="css/reveal.min.css">
+		<link rel="stylesheet" href="css/theme/default.css" id="theme">
+
+		<!-- For syntax highlighting -->
+		<link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- If the query includes 'print-pdf', include the PDF print sheet -->
+		<script>
+			if( window.location.search.match( /print-pdf/gi ) ) {
+				var link = document.createElement( 'link' );
+				link.rel = 'stylesheet';
+				link.type = 'text/css';
+				link.href = 'css/print/pdf.css';
+				document.getElementsByTagName( 'head' )[0].appendChild( link );
+			}
+		</script>
+
+		<!--[if lt IE 9]>
+		<script src="lib/js/html5shiv.js"></script>
+		<![endif]-->
+	</head>
+
+	<body>
+
+		<div class="reveal">
+
+			<!-- Any section element inside of this container is displayed as a slide -->
+			<div class="slides">
+
+<section>
+  <h1>Use the Source</h1>
+  <h3>Using go/ast for fun<br>and profit</h3>
+  <p>
+    <small>by Derek Denny-Brown</small>
+  </p>
+</section>
+
+<section>
+<h1>about me</h1>
+<p>I work for an small innovative startup<small><sup>1</sup></small>.</p>
+<p>Mostly I have been writing go code.</p>
+<p><br><br></p>
+<footer>(1) <a href="http://igneous.io/">Igneous Systems</a> (We are hiring.)</footer>
+</section>
+
+<section>
+<h1>coding with go</h1>
+<p>I used emacs + gocode + flycheck.</p>
+<p>Writing code was fast and fun!</p>
+<p>Fast compile + fast test = Awesome</p>
+</section>
+
+<section>
+<h1>but...</h1>
+<p>... but testing cross-package dependencies was less fun ...</p>
+<p>&nbsp;</p>
+<h2>I needed to remember:</h2>
+<ul>
+<li>what other packages depended on the package I was writing</li>
+<li>to compile andd test those packages after making changes.</li>
+</ul>
+</section>
+
+<section>
+<h1>If only</h1>
+<p>I thought it would be fun to write a small program that scanned your whole tree and tracked dependencies.</p>
+<hr>
+<p>If package <code>igneous/foo</code> depends on package <code>igneous/bar</code>,</p>
+<p>Then <i>automatically</i> check <code>igneous/foo</code> when I change <code>igneous/bar</code>.</p>
+</section>
+
+<section>
+<h1>enter.. go/ast</h1>
+<pre><code> fset := token.NewFileSet()
+ ast, err := parser.ParseFile(fset, filename, nil, parser.ImportsOnly)
+ if err == nil {
+     for _, imprt := range ast.Imports {
+         // do magic
+     }
+ }
+</code></pre>
+</section>
+
+<section>
+<h1>go-auto-test</h1>
+<p>In a few hours I was able to code up a tool that:</p>
+<ul>
+<li>built a dependency graph</li>
+<li>listened for file change notifications</li>
+<li>launched 'go test' for the appropriate packages</li>
+</ul>
+</section>
+
+<section>
+<h1>go/ast</h1>
+<p>go/ast is more than just parsing imports</p>
+<ul>
+<li>It is a full parser for the go language</li>
+<li>It is the same parser used by go fmt, go vet, and other tools.</li>
+<li>It is included with go's standard libraries (!!)</li>
+</ul>
+</section>
+
+<section>
+<h1>go/ast</h1>
+<p>The library is relatively easy to use.</p>
+<p>... compared to writing your own parser ...</p>
+<p>... compared to any other parser/ast library I have every used ...</p>
+<!--<p>The type names are modeled the grammar in the official Go Programming Language Specification.</p>-->
+</section>
+
+<section>
+<h1>ast what?</h1>
+<p>what does 'ast' mean?</p>
+<p class="fragment">ast = Abstract Syntax Tree</p>
+<p class="fragment">graph of structures representing a parsed text file</p>
+</section>
+
+<section>
+<h1>ast what?</h1>
+<h2>More practically</h2>
+<p>It means a go <code>struct</code><br/>
+for every possible<br> expression/statement<br> in the language.</p>
+<p class="fragment"><br>(57 different structs<br> + 5 interfaces in go/ast)</p>
+</section>
+
+<section>
+<h1>Node</h1>
+<p>Everything implements ast.Node</p>
+<pre><code>// package go/ast
+type Node interface {
+	// position of first character belonging to the node
+        Pos() token.Pos 
+	// position of first character immediately after the node
+        End() token.Pos
+}
+
+</code></pre>
+<div class="fragment">
+<p>Which means you end up writing lots of code like:
+<pre><code>
+    switch node.(type) {
+        case *ast.CallExpr:
+            call := node.(*ast.CallExpr)
+
+</code></pre>
+</div>
+</section>
+
+<section>
+<h1>Walk</h1>
+<p>To visit the entire parse tree use:</p>
+<pre><code>// package go/ast
+
+func Walk(v Visitor, node Node)
+
+</code></pre>
+Where your code implements the Visitor interface:
+<pre><code>
+type Visitor interface {
+        Visit(node Node) (w Visitor)
+}
+
+</code></pre>
+</section>
+
+<section>
+<h1>Visit Example</h1>
+<pre><code>
+func (v visitorOSOctalCheck) Visit(node ast.Node) ast.Visitor {
+    switch node.(type) {
+    case *ast.CallExpr:
+        call := node.(*ast.CallExpr)
+        if isOSExpr(call.Fun, 0) {
+            for _, arg := range call.Args {
+                if ok, lit := checkOSCallArg(arg); !ok {
+                    panic(...)
+                }
+            }
+        }
+    }
+    return v
+}
+
+</code></pre>
+<p>I'll explain the code later.</p>
+</section>
+
+<section>
+<h1>Docs</h1>
+<p>One of the reasons I love go.<p>
+<h2>The Documentation is amazing.</h2>
+<p><a href="http://golang.org/pkg/go/ast/">http://golang.org/pkg/go/ast/</a></p>
+</section>
+
+<section>
+<h1>Digression</h1>
+<h2>D.P.H.</h2>
+<p>Desperate Perl Hacker - keep the grammar simple enough that you can do useful things with regex.</p>
+<p>&nbsp;</p>
+<p>see also:</p>
+<p><a href="http://www.tbray.org/ongoing/When/201x/2010/07/21/DPH">http://www.tbray.org/ongoing/When/201x/2010/07/21/DPH</a></p>
+</section>
+
+<section>
+<h1>DPH and Go</h1>
+<p>Go is surprisingly accomodating to D.P.H.</p>
+<p>At Igneous we have done some useful things with awk/grep.</p>
+</section>
+
+<section>
+<h1>codesmell</h1>
+<p>We have a script (<code>codesmell.sh</code>) that tries to identify bad coding patterns and catch them early.</p>
+</section>
+
+<section>
+<h1>codesmell #1</h2>
+<p>Check for hexadecimal being used in the <code>os</code> package in go<br> for what should probably be <i>octal</i>.</p>
+<pre><code>os.OpenFile(filename, flags, 0x755)</code></pre>
+<p>The author probably meant 0755 rather than 0x755.</p>
+<p class="fragment">At least that is what I meant when I made that mistake.</p>
+</section>
+
+<section>
+<h1>codesmell #1</h2>
+<p>Test to check for use of hex rather than octal.</p>
+<p>Uses find + grep.</p>
+<pre><code>
+find . -name '*.go' -exec grep -HEr 'os\.[A-Za-z]+\(.*0x.*\)' '{}' ';' 
+
+</code></pre>
+<p>What could go wrong with that?</p>
+</section>
+
+<section>
+<h1>os.OpenFile(..., 0x755)</h1>
+<p>This is the same code I showed earlier.</p>
+<p>This is the guts of the code to detect hex constants used when calling functions in the <code>os</code> package.</p>
+<pre><code>
+func (v visitorOSOctalCheck) Visit(node ast.Node) ast.Visitor {
+    switch node.(type) {
+    case *ast.CallExpr:
+        call := node.(*ast.CallExpr)
+        if isOSExpr(call.Fun, 0) {
+            for _, arg := range call.Args {
+                if ok, lit := checkOSCallArg(arg); !ok {
+                    panic(...)
+                }
+            }
+        }
+    }
+    return v
+}
+
+</code></pre>
+</section>
+
+<section>
+<h1>codesmell #2</h2>
+<p>We prefer that our code doesn't use '.' imports.</p>
+<p>Except that it is quite convenient when using gocheck.</p>
+</section>
+
+<section>
+<h1>codesmell #2</h2>
+<pre style="background:#3F3F3F; color:white; padding:10px;">/import \(/ {
+        inside_import += 1
+}
+
+/\. \"[a-zA-Z\/\.\-]+\"/ {
+        if (! /github\.com\/go-check\/check/ && inside_import > 0) {
+                if (! /^[ \t]+\/\/.*$/) {
+                        not_check += 1
+                }
+        }
+}
+
+/\)/ {
+        if (inside_import > 0) {
+                if (not_check > 0) {
+                        print FILENAME
+                }
+                exit 0
+        }
+
+        not_check=0
+        inside_import=0
+}
+</pre>
+</section>
+
+<section>
+<h1>codesmell con't</h1>
+<p>Getting those grep/awk scripts correct was tricky</p>
+<p>... and they were error prone.</p>
+<p><br></p>
+<p>(I know because the go/ast replacement<br> found issues that they missed.)</p>
+</section>
+
+<section>
+<h1>codesmell v2</h1>
+<p>I replaced the awk/grep tests with go/ast based tests.<p>
+<ul>
+<li>It is faster - from: >5s to <1s</li>
+<li>More robust - the awk test couldn't handle multiple import statements</li>
+<li>Provides better error messages - reporting file + line-number</li>
+<li>Easy to extend with new checks.</li>
+</ul>
+</section>
+
+<section>
+<h1>What can't it do?</h1>
+<ul>
+<li>It is just the AST</li>
+<li>No type resolution</li>
+<li>No variable resolution</li>
+<li>Raw source - need to parse values yourself<br>
+<code>ImportSpec.Path.Value = "\"go/ast\""</code></li>
+</ul>
+</section>
+
+<section>
+<h1>What can't it do?</h1>
+<p>For example:</p>
+<p>We wanted to identify if the type of a field was an interface.<p>
+<p>You can't really do that with go/ast</p>
+<p>but ... see: go.tools/go/ssa</p>
+</section>
+
+<section>
+  <h1>THE END</h1>
+</section>
+
+			</div>
+
+		</div>
+
+		<script src="lib/js/head.min.js"></script>
+		<script src="js/reveal.min.js"></script>
+
+		<script>
+
+			// Full list of configuration options available here:
+			// https://github.com/hakimel/reveal.js#configuration
+			Reveal.initialize({
+				controls: true,
+				progress: true,
+				history: true,
+				center: true,
+
+				theme: 'moon', // Reveal.getQueryHash().theme, // available themes are in /css/theme
+				transition: Reveal.getQueryHash().transition || 'fade', // default/cube/page/concave/zoom/linear/fade/none
+
+				// Parallax scrolling
+				// parallaxBackgroundImage: 'https://s3.amazonaws.com/hakim-static/reveal-js/reveal-parallax-1.jpg',
+				// parallaxBackgroundSize: '2100px 900px',
+
+				// Optional libraries used to extend on reveal.js
+				dependencies: [
+					{ src: 'lib/js/classList.js', condition: function() { return !document.body.classList; } },
+					{ src: 'plugin/markdown/marked.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/markdown/markdown.js', condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+					{ src: 'plugin/highlight/highlight.js', async: true, callback: function() { hljs.initHighlightingOnLoad(); } },
+					{ src: 'plugin/zoom-js/zoom.js', async: true, condition: function() { return !!document.body.classList; } },
+					{ src: 'plugin/notes/notes.js', async: true, condition: function() { return !!document.body.classList; } }
+				]
+			});
+
+		</script>
+
+	</body>
+</html>
